@@ -1,6 +1,8 @@
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
   advanceSnapshot,
@@ -115,6 +117,11 @@ app.patch("/api/detections/:id", (request, response) => {
     detections.find((detection) => detection.id === request.params.id),
   );
 });
+const webDist = resolve(dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+app.use(express.static(webDist, { index: false }));
+app.get("*", (_request, response) =>
+  response.sendFile(resolve(webDist, "index.html")),
+);
 function publish() {
   const message = JSON.stringify(snapshot);
   for (const socket of sockets.clients)

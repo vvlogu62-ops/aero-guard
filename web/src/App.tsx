@@ -98,16 +98,26 @@ export default function App() {
   );
   const [apiError, setApiError] = useState(false);
   useEffect(() => {
-    getSnapshot()
-      .then(setSnapshot)
-      .catch(() => setApiError(true));
+    const refreshSnapshot = () => {
+      getSnapshot()
+        .then((next) => {
+          setSnapshot(next);
+          setApiError(false);
+        })
+        .catch(() => setApiError(true));
+    };
+    refreshSnapshot();
+    const refreshTimer = window.setInterval(refreshSnapshot, 5000);
     const socket = subscribeToSnapshot((next) => {
       setSnapshot(next);
       setApiError(false);
     });
     socket.onopen = () => setApiError(false);
     socket.onerror = () => setApiError(true);
-    return () => socket.close();
+    return () => {
+      window.clearInterval(refreshTimer);
+      socket.close();
+    };
   }, []);
   if (!authenticated)
     return (

@@ -1,6 +1,6 @@
 import type { SystemSnapshot } from "@aeroguard/shared";
 
-const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
+const baseUrl = import.meta.env.VITE_API_URL || "";
 export async function getSnapshot(): Promise<SystemSnapshot> {
   const response = await fetch(`${baseUrl}/api/snapshot`);
   if (!response.ok) throw new Error("API unavailable");
@@ -9,7 +9,9 @@ export async function getSnapshot(): Promise<SystemSnapshot> {
 export function subscribeToSnapshot(
   onSnapshot: (snapshot: SystemSnapshot) => void,
 ) {
-  const socketUrl = baseUrl.replace(/^http/, "ws") + "/ws";
+  const socketUrl = baseUrl
+    ? baseUrl.replace(/^http/, "ws") + "/ws"
+    : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
   const socket = new WebSocket(socketUrl);
   socket.onmessage = (event) =>
     onSnapshot(JSON.parse(event.data) as SystemSnapshot);
