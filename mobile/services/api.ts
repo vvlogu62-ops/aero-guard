@@ -1,6 +1,7 @@
 import type { Alert, SystemSnapshot } from "@aeroguard/shared";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:4000";
+const API_URL =
+  process.env.EXPO_PUBLIC_API_URL || "https://aeroguard-kit6.onrender.com";
 export async function fetchSnapshot(): Promise<SystemSnapshot> {
   const response = await fetch(`${API_URL}/api/snapshot`);
   if (!response.ok) throw new Error("AeroGuard API unavailable");

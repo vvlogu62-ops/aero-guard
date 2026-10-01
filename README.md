@@ -31,7 +31,7 @@ Sign in with any non-empty operator ID and password. This local demo login is no
 
 The `render.yaml` Blueprint deploys the built web dashboard, REST API, and WebSocket endpoint as one Node service. Push the repository to GitHub, then in Render choose **New → Blueprint**, connect `vvlogu62-ops/aero-guard`, select the `main` branch, and apply the Blueprint. Render builds with `npm ci && npm run build`, starts the backend workspace, and checks `/api/health`. The generated Render URL serves the dashboard and API from the same origin.
 
-After Render creates the service, point Expo Go or a future EAS build at that service URL. For local Expo Go testing, set `EXPO_PUBLIC_API_URL` to the Render URL before `npm run dev:mobile`; for EAS, configure the same variable in the EAS environment used for the build.
+The mobile app defaults to the deployed Render URL. For EAS builds, set `EXPO_PUBLIC_API_URL` to the generated service URL in the EAS build environment. For local Expo Go testing, override it with your local backend address as described below.
 
 The Blueprint uses Render's free plan. Free instances can sleep when idle, and this prototype keeps simulated state in memory, so state resets after a restart or redeploy. The API and mock login are not authenticated; deploy only demo data, never real drone telemetry or sensitive site information. Real operations require production authentication, persistent audited storage, and qualified safety review.
 
