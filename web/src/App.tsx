@@ -257,9 +257,9 @@ export default function App() {
             </div>
           </div>
           <button className="operator">
-            <span className="avatar">JR</span>
+            <span className="avatar">V</span>
             <span>
-              <strong>Jordan Reyes</strong>
+              <strong>Veera</strong>
               <small>Field operator</small>
             </span>
             <MoreHorizontal size={17} />
