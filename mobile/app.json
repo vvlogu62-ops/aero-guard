@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "AeroGuard Operator",
+    "slug": "aeroguard-operator",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#101614"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#101614"
+      },
+      "package": "com.aeroguard.operator"
+    },
+    "extra": {
+      "apiUrl": "http://localhost:4000"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}

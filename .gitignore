@@ -1,0 +1,7 @@
+node_modules/
+**/dist/
+*.tsbuildinfo
+**/.expo/
+web/.env.local
+mobile/.env
+.env

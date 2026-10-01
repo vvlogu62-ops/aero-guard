@@ -1,0 +1,9 @@
+.review-tools{margin:16px 0;padding:12px;background:#131a17;border:1px solid #2c3831;border-radius:4px}.review-tools label{display:block;color:#87968d;font:8px var(--mono);letter-spacing:.5px;margin-bottom:7px}.review-tools textarea{width:100%;min-height:56px;resize:vertical;padding:8px;color:#e5ece8;background:#101614;border:1px solid #35423b;border-radius:3px;font:10px 'Manrope',sans-serif}.review-tools-actions{display:flex;gap:7px;margin-top:8px}.review-tools-actions button{min-height:29px;font-size:8px}
+.report-dialog{width:min(590px,100%);max-height:90vh;overflow:auto}
+.report-facts{margin:0 0 13px}
+.report-detail-section{padding:11px 0;border-top:1px solid #2b3630}
+.report-detail-section h3{margin:0 0 8px;color:#b8c4bb;font-size:10px}
+.report-detail-section p{color:#91a097;font-size:9px}
+.report-detection{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid #26312b}
+.report-detection strong{flex:1;font-size:9px}
+.report-detection>span:last-child{font:8px var(--mono);color:#98a59c}
