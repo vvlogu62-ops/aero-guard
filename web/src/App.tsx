@@ -37,18 +37,30 @@ import {
 import type {
   Alert,
   Detection,
+  GeofenceConfig,
   Mission,
+  OperatorIdentity,
   SystemSnapshot,
 } from "@aeroguard/shared";
 import SiteMap from "./SiteMap";
 import {
+  clearAccessToken,
+  createSimulationAlert,
+  createOperator,
   controlMission,
+  getAuditLog,
+  getCurrentOperator,
+  getOperators,
   getSnapshot,
   postMission,
+  selectTelemetryAdapter,
+  signIn,
   subscribeToSnapshot,
   updateAlert,
   updateDetection,
+  updateGeofence,
 } from "./api";
+import type { AuditEntry } from "./api";
 
 type Page =
   | "overview"
@@ -82,9 +94,8 @@ const date = (value: string) =>
   });
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(
-    () => localStorage.getItem("aeroguard-session") === "demo",
-  );
+  const [operator, setOperator] = useState<OperatorIdentity | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [page, setPage] = useState<Page>("overview");
   const [drawer, setDrawer] = useState(false);
@@ -93,11 +104,20 @@ export default function App() {
     null,
   );
   const [selectedReport, setSelectedReport] = useState<Mission | null>(null);
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [geofenceRadius, setGeofenceRadius] = useState(350);
   const [alertFilter, setAlertFilter] = useState<"all" | Alert["severity"]>(
     "all",
   );
   const [apiError, setApiError] = useState(false);
   useEffect(() => {
+    getCurrentOperator()
+      .then(setOperator)
+      .catch(() => clearAccessToken())
+      .finally(() => setAuthReady(true));
+  }, []);
+  useEffect(() => {
+    if (!operator) return;
     const refreshSnapshot = () => {
       getSnapshot()
         .then((next) => {
@@ -108,24 +128,35 @@ export default function App() {
     };
     refreshSnapshot();
     const refreshTimer = window.setInterval(refreshSnapshot, 5000);
-    const socket = subscribeToSnapshot((next) => {
-      setSnapshot(next);
-      setApiError(false);
-    });
-    socket.onopen = () => setApiError(false);
-    socket.onerror = () => setApiError(true);
+    const closeSocket = subscribeToSnapshot(
+      (next) => {
+        setSnapshot(next);
+        setApiError(false);
+      },
+      () => setApiError(false),
+      () => setApiError(true),
+    );
     return () => {
       window.clearInterval(refreshTimer);
-      socket.close();
+      closeSocket();
     };
-  }, []);
-  if (!authenticated)
+  }, [operator]);
+  useEffect(() => {
+    if (page !== "settings" || operator?.role !== "supervisor") return;
+    getAuditLog().then(setAuditEntries).catch(() => setAuditEntries([]));
+  }, [page, operator]);
+  if (!authReady)
+    return (
+      <div className="loading-screen">
+        <div className="brand-mark"><Shield size={20} /></div>
+        <span>AEROGUARD</span>
+        <small>Checking operator session...</small>
+      </div>
+    );
+  if (!operator)
     return (
       <LoginScreen
-        onLogin={() => {
-          localStorage.setItem("aeroguard-session", "demo");
-          setAuthenticated(true);
-        }}
+        onLogin={async (email, password) => setOperator(await signIn(email, password))}
       />
     );
   if (!snapshot)
@@ -142,6 +173,7 @@ export default function App() {
         </small>
       </div>
     );
+  const canOperate = operator.role !== "maintenance";
   const openAlerts = snapshot.alerts.filter((alert) => alert.status === "open");
   const currentMission = snapshot.missions.find(
     (mission) => mission.status === "active" || mission.status === "paused",
@@ -164,13 +196,37 @@ export default function App() {
   };
   const saveDetectionReview = async (
     id: string,
-    update: { status?: "reviewed"; reviewNote?: string },
+    update: { status?: "reviewed" | "false_positive"; reviewNote?: string },
   ) => {
     const response = await updateDetection(id, update);
     if (!response.ok) window.alert("Could not update the AI review.");
   };
   const sendControl = async (action: string) => {
     if (currentMission) await controlMission(currentMission.id, action);
+  };
+  const saveGeofence = async () => {
+    const geofence: GeofenceConfig = {
+      ...snapshot.geofence,
+      radiusMeters: geofenceRadius,
+    };
+    const response = await updateGeofence(geofence);
+    if (!response.ok)
+      window.alert("Could not update the geofence. Supervisor access is required.");
+  };
+  const testPushAlert = async () => {
+    const response = await createSimulationAlert({
+      title: "Push notification test",
+      description: "Supervisor test alert from the simulation console.",
+      asset: "Pipeline-03",
+      severity: "info",
+    });
+    if (!response.ok) window.alert("Could not create test alert.");
+    else window.alert("Test alert sent to registered Expo devices.");
+  };
+  const requestLiveTelemetry = async () => {
+    const response = await selectTelemetryAdapter("mavlink");
+    const body = (await response.json()) as { error?: string };
+    window.alert(body.error || "Live telemetry is unavailable.");
   };
   const exportReports = () => {
     const rows = [
@@ -256,11 +312,19 @@ export default function App() {
               <small>Telemetry streaming · 2s</small>
             </div>
           </div>
-          <button className="operator">
-            <span className="avatar">V</span>
+            <button
+              className="operator"
+              onClick={async () => {
+                await clearAccessToken();
+                setOperator(null);
+                setSnapshot(null);
+              }}
+              title="Sign out"
+            >
+              <span className="avatar">{operator.name.slice(0, 1).toUpperCase()}</span>
             <span>
-              <strong>Veera</strong>
-              <small>Field operator</small>
+                <strong>{operator.name}</strong>
+                <small>{operator.role} · Sign out</small>
             </span>
             <MoreHorizontal size={17} />
           </button>
@@ -325,12 +389,12 @@ export default function App() {
                     all AI detections.
                   </p>
                 </div>
-                <button
+                {canOperate && <button
                   className="primary-button"
                   onClick={() => setShowMission(true)}
                 >
                   <Plus size={16} /> New inspection
-                </button>
+                </button>}
               </div>
               <div className="metric-grid">
                 <Metric
@@ -439,7 +503,7 @@ export default function App() {
                       <strong>{snapshot.drone.flightMode}</strong>
                     </div>
                   </div>
-                  <div className="control-row">
+                  {canOperate && <div className="control-row">
                     <button
                       className="secondary-button"
                       onClick={() =>
@@ -460,7 +524,7 @@ export default function App() {
                     >
                       Return to home
                     </button>
-                  </div>
+                  </div>}
                   <div className="simulation-note">
                     <CircleHelp size={13} /> Controls affect simulation only
                   </div>
@@ -592,12 +656,12 @@ export default function App() {
                       required
                     </p>
                   </div>
-                  <button
+                  {canOperate && <button
                     className="secondary-button full-button"
                     onClick={() => setShowMission(true)}
                   >
                     <Plus size={15} /> New inspection
-                  </button>
+                  </button>}
                 </div>
               </div>
             </>
@@ -607,14 +671,14 @@ export default function App() {
               <PageHeading
                 title="Inspection missions"
                 description="Plan and monitor autonomous inspection flights."
-                action={
+                action={canOperate ? (
                   <button
                     className="primary-button"
                     onClick={() => setShowMission(true)}
                   >
                     <Plus size={16} /> Create mission
                   </button>
-                }
+                ) : undefined}
               />
               <div className="panel table-panel">
                 <table>
@@ -636,7 +700,7 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              <section className="panel control-card">
+              {canOperate && <section className="panel control-card">
                 <PanelHeader title="Flight controls" tag="SIMULATION ONLY" />
                 <div className="control-card-content">
                   <div>
@@ -678,7 +742,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              </section>
+              </section>}
             </>
           )}
           {page === "detections" && (
@@ -938,7 +1002,7 @@ export default function App() {
             <>
               <PageHeading
                 title="System settings"
-                description="Operator preferences and integration status."
+                description={`Authenticated as ${operator.name} · ${operator.role.toUpperCase()} · simulation safety controls`}
               />
               <div className="settings-grid">
                 <section className="panel settings-section">
@@ -946,7 +1010,7 @@ export default function App() {
                   <SettingRow
                     title="Flight controller"
                     subtitle="Pixhawk · ArduPilot adapter"
-                    value="Not connected"
+                    value={snapshot.telemetryAdapter === "mavlink" ? "LIVE LOCKED" : "Not connected"}
                   />
                   <SettingRow
                     title="Edge computer"
@@ -961,7 +1025,7 @@ export default function App() {
                   <SettingRow
                     title="Operator API"
                     subtitle="REST + WebSocket"
-                    value="Connected"
+                    value={`${operator.role} session`}
                   />
                 </section>
                 <section className="panel settings-section">
@@ -975,17 +1039,19 @@ export default function App() {
                       safety procedures.
                     </p>
                   </div>
-                  <button
-                    className="secondary-button"
-                    onClick={() =>
-                      window.alert(
-                        "Preferences are stored locally in this prototype.",
-                      )
-                    }
-                  >
-                    Operator preferences
-                  </button>
+                  <div className="geofence-control">
+                    <div><strong>Site geofence</strong><small>Inspection boundary · maximum altitude {snapshot.geofence.maxAltitudeMeters} m</small></div>
+                    <label>RADIUS <strong>{geofenceRadius} m</strong><input type="range" min="50" max="1000" step="25" value={geofenceRadius} disabled={operator.role !== "supervisor"} onChange={(event) => setGeofenceRadius(Number(event.target.value))} /></label>
+                    <button className="secondary-button" disabled={operator.role !== "supervisor"} onClick={() => void saveGeofence()}>Save geofence</button>
+                  </div>
+                  <div className="safety-actions">
+                    <button className="secondary-button" onClick={() => void requestLiveTelemetry()}>Check MAVLink readiness</button>
+                    {operator.role === "supervisor" && <button className="secondary-button" onClick={() => void testPushAlert()}>Send test alert</button>}
+                  </div>
+                  <small className="settings-footnote">LIVE telemetry remains locked until a validated MAVLink adapter is connected.</small>
                 </section>
+                {operator.role === "supervisor" && <section className="panel settings-section audit-section"><PanelHeader title="Recent audit activity" tag="SUPERVISOR" />{auditEntries.length ? auditEntries.slice(0, 12).map((entry) => <div className="audit-row" key={entry.id}><span><strong>{entry.action}</strong><small>{entry.actorEmail} · {entry.targetId}</small></span><time>{time(entry.createdAt)}</time></div>) : <p className="settings-footnote">No operator actions recorded yet.</p>}</section>}
+                {operator.role === "supervisor" && <section className="panel settings-section audit-section"><PanelHeader title="Operator accounts" tag="SUPERVISOR" /><OperatorManagement onCreated={() => getAuditLog().then(setAuditEntries).catch(() => undefined)} /></section>}
               </div>
             </>
           )}
@@ -1051,7 +1117,11 @@ export default function App() {
                   <strong>
                     {detection.status === "normal"
                       ? "Normal"
-                      : "Attention required"}
+                      : detection.status === "false_positive"
+                        ? "False positive"
+                        : detection.status === "reviewed"
+                          ? `Reviewed by ${detection.reviewedBy || "operator"}`
+                          : "Attention required"}
                   </strong>
                 </span>
               </div>
@@ -1083,7 +1153,15 @@ export default function App() {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: () => void }) {
+function LoginScreen({
+  onLogin,
+}: {
+  onLogin: (email: string, password: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   return (
     <main className="login-screen">
       <div className="login-panel">
@@ -1094,17 +1172,27 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
         <h1>AEROGUARD</h1>
         <p>Industrial inspection command center</p>
         <form
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            onLogin();
+            setBusy(true);
+            setError("");
+            try {
+              await onLogin(email, password);
+            } catch (loginError) {
+              setError(loginError instanceof Error ? loginError.message : "Sign in failed");
+            } finally {
+              setBusy(false);
+            }
           }}
         >
           <label>
             EMAIL / OPERATOR ID
             <input
               required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
               autoComplete="username"
-              placeholder="operator@site.com"
+              placeholder="veera@aeroguard.demo"
             />
           </label>
           <label>
@@ -1112,19 +1200,22 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
             <input
               required
               type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
               autoComplete="current-password"
               placeholder="Enter password"
             />
           </label>
-          <button className="primary-button" type="submit">
-            Sign in <ArrowUpRight size={15} />
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Checking..." : "Sign in"} <ArrowUpRight size={15} />
           </button>
         </form>
         <div className="login-demo">
-          <span className="pulse-dot" /> DEMO MODE · LOCAL PROTOTYPE ACCESS
+          <span className="pulse-dot" /> ROLE-BASED OPERATOR ACCESS
         </div>
         <small>
-          Authentication is simulated and is not production security.
+          Login is verified by the AeroGuard service.
         </small>
       </div>
       <div className="login-coordinate">AEROGUARD / NORTH YARD · AG-01</div>
@@ -1392,7 +1483,7 @@ function DetectionReviewTools({
 }: {
   detection: Detection;
   onUpdate: (update: {
-    status?: "reviewed";
+    status?: "reviewed" | "false_positive";
     reviewNote?: string;
   }) => Promise<void>;
 }) {
@@ -1419,8 +1510,56 @@ function DetectionReviewTools({
         >
           Mark reviewed
         </button>
+        <button
+          className="secondary-button"
+          onClick={() => void onUpdate({ status: "false_positive" })}
+        >
+          Mark false positive
+        </button>
       </div>
     </div>
+  );
+}
+
+function OperatorManagement({ onCreated }: { onCreated: () => void }) {
+  const [operators, setOperators] = useState<OperatorIdentity[]>([]);
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<OperatorIdentity["role"]>("operator");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const loadOperators = () => getOperators().then(setOperators).catch(() => setError("Unable to load operator accounts."));
+  useEffect(() => { void loadOperators(); }, []);
+  return (
+    <>
+      <form className="operator-form" onSubmit={async (event) => {
+        event.preventDefault();
+        setError("");
+        const response = await createOperator({ email, name, role, password });
+        if (!response.ok) {
+          const body = (await response.json()) as { error?: string };
+          setError(body.error || "Could not create operator.");
+          return;
+        }
+        setEmail("");
+        setName("");
+        setPassword("");
+        await loadOperators();
+        onCreated();
+      }}>
+        <input required type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Operator name" maxLength={80} />
+        <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="operator@site.com" />
+        <select value={role} onChange={(event) => setRole(event.target.value as OperatorIdentity["role"])}>
+          <option value="operator">Operator</option>
+          <option value="maintenance">Maintenance</option>
+          <option value="supervisor">Supervisor</option>
+        </select>
+        <input required type="password" minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Temporary password · 12+ chars" />
+        {error && <p className="login-error" role="alert">{error}</p>}
+        <button className="primary-button" type="submit">Add operator</button>
+      </form>
+      {operators.map((operator) => <div className="setting-row" key={operator.id}><div><strong>{operator.name}</strong><small>{operator.email}</small></div><span>{operator.role}</span></div>)}
+    </>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { SystemSnapshot } from '@aeroguard/shared';
 
@@ -15,6 +15,7 @@ export default function SiteMap({ snapshot, compact = false }: { snapshot: Syste
   return <div className={`map-frame ${compact ? 'map-compact' : ''}`}>
     <MapContainer center={position} zoom={17} scrollWheelZoom={!compact} zoomControl={!compact}>
       <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+      {snapshot.geofence.enabled && <Circle center={[snapshot.geofence.centerLatitude, snapshot.geofence.centerLongitude]} radius={snapshot.geofence.radiusMeters} pathOptions={{ color: '#67a48a', fillColor: '#67a48a', fillOpacity: 0.06, dashArray: '5 7', weight: 1.5 }} />}
       <FollowDrone position={position} />
       <Polyline positions={snapshot.flightPath} pathOptions={{ color: '#2dd4bf', weight: 3, dashArray: '7 8' }} />
       <Marker position={position} icon={droneIcon}><Popup>AG-01 · {snapshot.drone.altitude} m · SIMULATION</Popup></Marker>

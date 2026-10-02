@@ -1,7 +1,12 @@
 export type Severity = "critical" | "warning" | "info";
 export type RecordStatus = "open" | "reviewed";
 export type MissionStatus = "active" | "paused" | "completed" | "scheduled";
-export type DetectionStatus = "attention_required" | "reviewed" | "normal";
+export type DetectionStatus =
+  | "attention_required"
+  | "reviewed"
+  | "false_positive"
+  | "normal";
+export type OperatorRole = "operator" | "supervisor" | "maintenance";
 
 export interface DroneStatus {
   id: string;
@@ -30,6 +35,8 @@ export interface Detection {
   image: string;
   status: DetectionStatus;
   reviewNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
 }
 
 export interface TemperatureReading {
@@ -71,7 +78,10 @@ export interface ActivityEvent {
 }
 
 export interface SystemSnapshot {
-  mode: "SIMULATION";
+  mode: "SIMULATION" | "LIVE";
+  telemetryAdapter: "simulation" | "mavlink";
+  telemetryConnected: boolean;
+  geofence: GeofenceConfig;
   updatedAt: string;
   drone: DroneStatus;
   detections: Detection[];
@@ -80,4 +90,19 @@ export interface SystemSnapshot {
   missions: Mission[];
   activity: ActivityEvent[];
   flightPath: Array<[number, number]>;
+}
+
+export interface GeofenceConfig {
+  centerLatitude: number;
+  centerLongitude: number;
+  radiusMeters: number;
+  maxAltitudeMeters: number;
+  enabled: boolean;
+}
+
+export interface OperatorIdentity {
+  id: string;
+  email: string;
+  name: string;
+  role: OperatorRole;
 }

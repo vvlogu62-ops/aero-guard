@@ -25,7 +25,9 @@ export function createInitialSnapshot(): SystemSnapshot {
     { id: 'MSN-0082', asset: 'Compressor-02', zone: 'Zone C', type: 'Temperature Monitoring', status: 'scheduled', startTime: stamp(-34), detections: 0, progress: 0 }
   ];
   return {
-    mode: 'SIMULATION', updatedAt: new Date(now).toISOString(),
+    mode: 'SIMULATION', telemetryAdapter: 'simulation', telemetryConnected: true,
+    geofence: { centerLatitude: 37.7749, centerLongitude: -122.4194, radiusMeters: 350, maxAltitudeMeters: 80, enabled: true },
+    updatedAt: new Date(now).toISOString(),
     drone: { id: 'AG-01', status: 'online', latitude: 37.7749, longitude: -122.4194, altitude: 24, speed: 4.8, battery: 82, signal: 94, satellites: 12, flightMode: 'AUTO', missionStatus: 'active', heading: 128 },
     detections, temperatures, alerts, missions,
     activity: [

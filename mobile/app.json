@@ -6,23 +6,48 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "splash": {
-      "backgroundColor": "#101614"
+      "backgroundColor": "#101614",
+      "resizeMode": "contain"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.aeroguard.operator",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "AeroGuard uses location to display drone position on the site map.",
+        "NSCameraUsageDescription": "Camera access may be used for future field photo capture."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#101614"
       },
-      "package": "com.aeroguard.operator"
+      "package": "com.aeroguard.operator",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "INTERNET",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
     },
     "extra": {
-      "apiUrl": "http://localhost:4000"
+      "apiUrl": "https://aeroguard-kit6.onrender.com",
+      "eas": {
+        "projectId": "aeroguard-operator"
+      }
     },
     "plugins": [
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#5cdbb1",
+          "sounds": []
+        }
+      ],
+      "expo-secure-store"
     ]
   }
 }

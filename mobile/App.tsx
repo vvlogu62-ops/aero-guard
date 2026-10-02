@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert as NativeAlert,
@@ -11,8 +11,11 @@ import {
   TextInput,
   View,
 } from "react-native";
+import Constants from "expo-constants";
+import * as Notifications from "expo-notifications";
 import MapView, {
   Callout,
+  Circle,
   Marker,
   Polyline,
   PROVIDER_DEFAULT,
@@ -23,18 +26,36 @@ import type {
   Alert,
   Detection,
   Mission,
+  OperatorIdentity,
+  OperatorRole,
   SystemSnapshot,
 } from "@aeroguard/shared";
 import {
+  checkLiveTelemetry,
   controlMission,
+  createSimulationAlert,
   fetchSnapshot,
+  getAuditLog,
+  registerPushToken,
   reviewAlert,
+  restoreSession,
+  signIn,
+  signOut,
   startMission,
   updateDetection,
+  updateGeofence,
 } from "./services/api";
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 type Tab = "Home" | "Map" | "Mission" | "Alerts" | "More";
-type MorePage = "More" | "Detections" | "Temperature" | "Reports";
+type MorePage = "More" | "Detections" | "Temperature" | "Reports" | "Settings" | "Audit";
 const colors = {
   bg: "#101614",
   panel: "#18211d",
@@ -68,7 +89,8 @@ const time = (value: string) =>
   });
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const [operator, setOperator] = useState<OperatorIdentity | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const [snapshot, setSnapshot] = useState<SystemSnapshot | null>(null);
   const [tab, setTab] = useState<Tab>("Home");
   const [morePage, setMorePage] = useState<MorePage>("More");
@@ -82,8 +104,26 @@ export default function App() {
   );
   const [selectedReport, setSelectedReport] = useState<Mission | null>(null);
   const [filter, setFilter] = useState<"all" | Alert["severity"]>("all");
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const seenAlertIds = useRef<Set<string>>(new Set());
+  const initialAlertsLoaded = useRef(false);
 
   useEffect(() => {
+    let active = true;
+    void restoreSession()
+      .then((identity) => {
+        if (active) setOperator(identity);
+      })
+      .finally(() => {
+        if (active) setSessionReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!operator) return;
     let active = true;
     const load = async () => {
       try {
@@ -102,7 +142,76 @@ export default function App() {
       active = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [operator]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    if (!initialAlertsLoaded.current) {
+      seenAlertIds.current = new Set(snapshot.alerts.map((alert) => alert.id));
+      initialAlertsLoaded.current = true;
+      return;
+    }
+    const newAlerts = snapshot.alerts.filter(
+      (alert) => alert.status === "open" && !seenAlertIds.current.has(alert.id),
+    );
+    for (const alert of newAlerts) {
+      if (pushEnabled)
+        void Notifications.scheduleNotificationAsync({
+          content: {
+            title: `${alert.severity.toUpperCase()}: ${alert.title}`,
+            body: `${alert.asset} · ${alert.description}`,
+            data: { alertId: alert.id },
+          },
+          trigger: null,
+        });
+    }
+    seenAlertIds.current = new Set(snapshot.alerts.map((alert) => alert.id));
+  }, [snapshot, pushEnabled]);
+
+  const handleLogin = async (email: string, password: string) => {
+    setOperator(await signIn(email, password));
+  };
+  const handleLogout = async () => {
+    await signOut();
+    setOperator(null);
+    setSnapshot(null);
+  };
+  const enablePush = async () => {
+    let permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted)
+      permission = await Notifications.requestPermissionsAsync();
+    if (!permission.granted) {
+      NativeAlert.alert(
+        "Notifications disabled",
+        "Enable notifications in device settings to receive critical alerts.",
+      );
+      return;
+    }
+    setPushEnabled(true);
+    const projectId =
+      Constants.easConfig?.projectId || Constants.expoConfig?.extra?.eas?.projectId;
+    if (!projectId) {
+      NativeAlert.alert(
+        "Local alerts enabled",
+        "In-app notifications are active. Remote push requires an EAS project ID and APNs/FCM credentials.",
+      );
+      return;
+    }
+    try {
+      const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+      const response = await registerPushToken(token);
+      if (!response.ok) throw new Error("Registration rejected");
+      NativeAlert.alert(
+        "Notifications enabled",
+        "This device is registered for AeroGuard alert notifications.",
+      );
+    } catch {
+      NativeAlert.alert(
+        "Push setup unavailable",
+        "Check EAS/APNs/FCM credentials and try again.",
+      );
+    }
+  };
 
   const runControl = async (action: string) => {
     const mission = snapshot?.missions.find(
@@ -151,7 +260,7 @@ export default function App() {
   };
   const saveDetectionReview = async (
     id: string,
-    update: { status?: "reviewed"; reviewNote?: string },
+    update: { status?: "reviewed" | "false_positive"; reviewNote?: string },
   ) => {
     const response = await updateDetection(id, update);
     if (!response.ok)
@@ -162,13 +271,23 @@ export default function App() {
     setTab("More");
   };
 
-  if (!authenticated)
+  if (!sessionReady)
     return (
       <SafeAreaView style={styles.loading}>
         <StatusBar barStyle="light-content" />
-        <LoginScreen onLogin={() => setAuthenticated(true)} />
+        <Brand />
+        <ActivityIndicator color={colors.mint} />
+        <Text style={styles.muted}>Checking operator session...</Text>
       </SafeAreaView>
     );
+  if (!operator)
+    return (
+      <SafeAreaView style={styles.loading}>
+        <StatusBar barStyle="light-content" />
+        <LoginScreen onLogin={handleLogin} />
+      </SafeAreaView>
+    );
+  const canOperate = operator.role !== "maintenance";
   if (!snapshot)
     return (
       <SafeAreaView style={styles.loading}>
@@ -328,14 +447,14 @@ export default function App() {
             )}
             <Text style={styles.sectionTitle}>QUICK ACTIONS</Text>
             <View style={styles.quickActions}>
-              <QuickAction
+              {canOperate && <QuickAction
                 icon="navigate"
                 label="START MISSION"
                 onPress={() => {
                   setTab("Mission");
                   setShowMissionForm(true);
                 }}
-              />
+              />}
               <QuickAction
                 icon="map"
                 label="LIVE MAP"
@@ -352,7 +471,7 @@ export default function App() {
                 onPress={() => openMore("Reports")}
               />
             </View>
-            <MissionControls mission={mission} onControl={runControl} />
+            {canOperate && <MissionControls mission={mission} onControl={runControl} />}
             <Text style={styles.disclaimer}>
               SIMULATED TELEMETRY · NOT CONNECTED TO A REAL AIRCRAFT
             </Text>
@@ -456,18 +575,18 @@ export default function App() {
                     value={`${snapshot.drone.battery}%`}
                   />
                 </View>
-                <MissionControls mission={mission} onControl={runControl} />
-                <Pressable
+                {canOperate && <MissionControls mission={mission} onControl={runControl} />}
+                {canOperate && <Pressable
                   style={styles.secondaryButton}
                   onPress={() => setShowMissionForm(true)}
                 >
                   <Text style={styles.secondaryButtonText}>
                     PLAN NEW INSPECTION
                   </Text>
-                </Pressable>
+                </Pressable>}
               </View>
             )}
-            {(!mission || showMissionForm) && (
+            {canOperate && (!mission || showMissionForm) && (
               <View style={styles.formPanel}>
                 <StepLabel n="01" label="SELECT ASSET" />
                 <ChoiceRow
@@ -531,6 +650,7 @@ export default function App() {
                 )}
               </View>
             )}
+            {!canOperate && <Text style={styles.settingsHint}>Maintenance role is read-only for flight missions and controls.</Text>}
           </ScrollView>
         )}
         {tab === "Alerts" && (
@@ -596,6 +716,7 @@ export default function App() {
               <>
                 <Text style={styles.eyebrow}>AEROGUARD OPERATOR</Text>
                 <Text style={[styles.title, styles.screenTitle]}>More</Text>
+                <Text style={styles.operatorRole}>{operator.name} · {operator.role.toUpperCase()}</Text>
                 <View style={styles.moreMenu}>
                   <MoreItem
                     icon="scan"
@@ -616,6 +737,26 @@ export default function App() {
                     onPress={() => setMorePage("Reports")}
                   />
                   <MoreItem
+                    icon="shield-checkmark-outline"
+                    title="Safety & telemetry"
+                    subtitle="Geofence · adapter status"
+                    onPress={() => setMorePage("Settings")}
+                  />
+                  {operator.role === "supervisor" && (
+                    <MoreItem
+                      icon="list"
+                      title="Audit log"
+                      subtitle="Supervisor access"
+                      onPress={() => setMorePage("Audit")}
+                    />
+                  )}
+                  <MoreItem
+                    icon="notifications"
+                    title="Enable push alerts"
+                    subtitle="Register this device for critical alerts"
+                    onPress={() => void enablePush()}
+                  />
+                  <MoreItem
                     icon="settings"
                     title="System settings"
                     subtitle="Connections · simulation status"
@@ -625,6 +766,12 @@ export default function App() {
                         "REST API + simulation stream\nPixhawk / ArduPilot: not connected\nRaspberry Pi / YOLO: simulated",
                       )
                     }
+                  />
+                  <MoreItem
+                    icon="log-out-outline"
+                    title="Sign out"
+                    subtitle="End this operator session"
+                    onPress={() => void handleLogout()}
                   />
                 </View>
                 <View style={styles.safetyBox}>
@@ -680,6 +827,12 @@ export default function App() {
                       onSelect={setSelectedReport}
                     />
                   ))}
+                {morePage === "Settings" && (
+                  <SettingsScreen snapshot={snapshot} role={operator.role} />
+                )}
+                {morePage === "Audit" && operator.role === "supervisor" && (
+                  <AuditScreen />
+                )}
               </>
             )}
           </ScrollView>
@@ -744,9 +897,15 @@ function Brand() {
     </View>
   );
 }
-function LoginScreen({ onLogin }: { onLogin: () => void }) {
+function LoginScreen({
+  onLogin,
+}: {
+  onLogin: (email: string, password: string) => Promise<void>;
+}) {
   const [operatorId, setOperatorId] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   return (
     <View style={styles.loginPanel}>
       <Brand />
@@ -781,13 +940,22 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
           styles.primaryButton,
           (!operatorId.trim() || !password) && styles.disabled,
         ]}
-        onPress={onLogin}
+        onPress={() => {
+          setBusy(true);
+          setError("");
+          void onLogin(operatorId, password)
+            .catch((loginError: unknown) =>
+              setError(loginError instanceof Error ? loginError.message : "Sign in failed"),
+            )
+            .finally(() => setBusy(false));
+        }}
       >
-        <Text style={styles.primaryButtonText}>SIGN IN</Text>
+        <Text style={styles.primaryButtonText}>{busy ? "CHECKING..." : "SIGN IN"}</Text>
       </Pressable>
-      <Text style={styles.loginDemo}>DEMO MODE · LOCAL PROTOTYPE ACCESS</Text>
+      {error ? <Text style={styles.loginError}>{error}</Text> : null}
+      <Text style={styles.loginDemo}>ROLE-BASED OPERATOR ACCESS</Text>
       <Text style={styles.loginFootnote}>
-        Mock sign-in only. This is not production authentication.
+        Sign-in is verified by the AeroGuard service.
       </Text>
     </View>
   );
@@ -848,6 +1016,19 @@ function MiniMap({
         showsUserLocation={false}
         toolbarEnabled={false}
       >
+        {snapshot.geofence.enabled && (
+          <Circle
+            center={{
+              latitude: snapshot.geofence.centerLatitude,
+              longitude: snapshot.geofence.centerLongitude,
+            }}
+            radius={snapshot.geofence.radiusMeters}
+            strokeColor="#6cc39f"
+            strokeWidth={1.5}
+            fillColor="#6cc39f16"
+            lineDashPattern={[5, 7]}
+          />
+        )}
         <Polyline
           coordinates={snapshot.flightPath.map(([latitude, longitude]) => ({
             latitude,
@@ -1357,6 +1538,92 @@ function ReportDetail({
     </>
   );
 }
+function SettingsScreen({
+  snapshot,
+  role,
+}: {
+  snapshot: SystemSnapshot;
+  role: OperatorRole;
+}) {
+  const [radius, setRadius] = useState(snapshot.geofence.radiusMeters);
+  const canEdit = role === "supervisor";
+  const saveFence = async () => {
+    const response = await updateGeofence({ ...snapshot.geofence, radiusMeters: radius });
+    NativeAlert.alert(
+      response.ok ? "Geofence saved" : "Update blocked",
+      response.ok ? "The new site boundary is now enforced during mission preflight." : "Supervisor permission is required and the safety limits must be met.",
+    );
+  };
+  const checkLive = async () => {
+    const response = await checkLiveTelemetry();
+    const result = (await response.json()) as { error?: string };
+    NativeAlert.alert("LIVE mode locked", result.error || "No real telemetry adapter is connected.");
+  };
+  const sendTestAlert = async () => {
+    const response = await createSimulationAlert({
+      title: "Push notification test",
+      description: "Supervisor test alert from the mobile app.",
+      asset: "Pipeline-03",
+      severity: "info",
+    });
+    NativeAlert.alert(response.ok ? "Test alert sent" : "Test alert failed", response.ok ? "Registered Expo devices will receive the test notification." : "Supervisor access is required.");
+  };
+  return (
+    <>
+      <Text style={styles.eyebrow}>SAFETY CONFIGURATION</Text>
+      <Text style={[styles.title, styles.screenTitle]}>System settings</Text>
+      <View style={styles.settingsCard}>
+        <Text style={styles.sectionTitle}>TELEMETRY SOURCE</Text>
+        <Text style={styles.settingsValue}>{snapshot.mode} · {snapshot.telemetryAdapter.toUpperCase()}</Text>
+        <Text style={styles.settingsHint}>Pixhawk / ArduPilot adapter is not configured. Simulated values are never real telemetry.</Text>
+        <Pressable style={styles.secondaryButton} onPress={() => void checkLive()}>
+          <Text style={styles.secondaryButtonText}>CHECK MAVLINK READINESS</Text>
+        </Pressable>
+      </View>
+      <View style={styles.settingsCard}>
+        <Text style={styles.sectionTitle}>ACTIVE GEOFENCE</Text>
+        <Text style={styles.settingsHint}>Mission zones outside this circle are blocked before dispatch.</Text>
+        <View style={styles.radiusRow}>
+          <Text style={styles.mapStatLabel}>RADIUS</Text>
+          <View style={styles.radiusStepper}>
+            <Pressable disabled={!canEdit || radius <= 50} style={styles.stepButton} onPress={() => setRadius((value) => Math.max(50, value - 25))}><Ionicons name="remove" size={17} color={canEdit ? colors.mint : colors.muted} /></Pressable>
+            <Text style={styles.radiusValue}>{radius} m</Text>
+            <Pressable disabled={!canEdit || radius >= 1000} style={styles.stepButton} onPress={() => setRadius((value) => Math.min(1000, value + 25))}><Ionicons name="add" size={17} color={canEdit ? colors.mint : colors.muted} /></Pressable>
+          </View>
+        </View>
+        <Text style={styles.settingsHint}>Maximum altitude: {snapshot.geofence.maxAltitudeMeters} m · center {snapshot.geofence.centerLatitude.toFixed(4)}, {snapshot.geofence.centerLongitude.toFixed(4)}</Text>
+        <Pressable disabled={!canEdit} style={[styles.primaryButton, !canEdit && styles.disabled]} onPress={() => void saveFence()}>
+          <Text style={styles.primaryButtonText}>{canEdit ? "SAVE GEOFENCE" : "SUPERVISOR ACCESS REQUIRED"}</Text>
+        </Pressable>
+      </View>
+      {canEdit && <Pressable style={styles.secondaryButton} onPress={() => void sendTestAlert()}><Text style={styles.secondaryButtonText}>SEND PUSH TEST ALERT</Text></Pressable>}
+      <Text style={styles.disclaimer}>SIMULATION SAFETY CHECKS ONLY · NOT A FLIGHT CERTIFICATION</Text>
+    </>
+  );
+}
+
+function AuditScreen() {
+  const [entries, setEntries] = useState<Awaited<ReturnType<typeof getAuditLog>>>([]);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    void getAuditLog().then(setEntries).catch(() => setError(true));
+  }, []);
+  return (
+    <>
+      <Text style={styles.eyebrow}>SUPERVISOR · AUDITED ACTIONS</Text>
+      <Text style={[styles.title, styles.screenTitle]}>Audit log</Text>
+      {error && <Text style={styles.settingsHint}>Could not load audit activity.</Text>}
+      {entries.map((entry) => (
+        <View key={entry.id} style={styles.auditItem}>
+          <View style={styles.auditHead}><Text style={styles.auditAction}>{entry.action}</Text><Text style={styles.auditTime}>{time(entry.createdAt)}</Text></View>
+          <Text style={styles.auditDetail}>{entry.actorEmail} · {entry.targetId}</Text>
+        </View>
+      ))}
+      {!entries.length && !error && <Text style={styles.settingsHint}>No audited actions yet.</Text>}
+    </>
+  );
+}
+
 function MapStat({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.mapStatCell}>
@@ -1373,7 +1640,7 @@ function DetectionModal({
 }: {
   detection: Detection;
   onUpdate: (update: {
-    status?: "reviewed";
+    status?: "reviewed" | "false_positive";
     reviewNote?: string;
   }) => Promise<void>;
   onClose: () => void;
@@ -1435,6 +1702,15 @@ function DetectionModal({
           }}
         >
           <Text style={styles.linkText}>MARK AS REVIEWED</Text>
+        </Pressable>
+        <Pressable
+          style={styles.textOnlyButton}
+          onPress={() => {
+            void onUpdate({ status: "false_positive" });
+            onClose();
+          }}
+        >
+          <Text style={[styles.linkText, { color: colors.orange }]}>MARK FALSE POSITIVE</Text>
         </Pressable>
       </View>
     </View>
@@ -1502,6 +1778,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: "center",
   },
+  loginError: { color: colors.red, fontSize: 9, textAlign: "center", marginTop: 8 },
+  operatorRole: { color: colors.muted, fontSize: 9, marginTop: -12, marginBottom: 12, fontFamily: "monospace" },
   muted: { color: colors.muted, fontSize: 12 },
   mutedSmall: { color: colors.muted, fontSize: 9, fontFamily: "monospace" },
   topbar: {
@@ -2140,6 +2418,25 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
     gap: 10,
   },
+  settingsCard: {
+    padding: 12,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 5,
+    marginBottom: 9,
+  },
+  settingsValue: { color: colors.mint, fontSize: 11, fontFamily: "monospace", marginTop: 9 },
+  settingsHint: { color: colors.muted, fontSize: 8, lineHeight: 14, marginTop: 7 },
+  radiusRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 13 },
+  radiusStepper: { flexDirection: "row", alignItems: "center", gap: 12 },
+  stepButton: { width: 32, height: 32, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.line, borderRadius: 4, backgroundColor: colors.panel2 },
+  radiusValue: { color: colors.text, fontSize: 11, fontFamily: "monospace", minWidth: 56, textAlign: "center" },
+  auditItem: { paddingVertical: 10, borderBottomWidth: 1, borderColor: colors.line },
+  auditHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 9 },
+  auditAction: { flex: 1, color: colors.text, fontSize: 9, fontFamily: "monospace" },
+  auditTime: { color: colors.muted, fontSize: 7, fontFamily: "monospace" },
+  auditDetail: { color: colors.muted, fontSize: 8, marginTop: 5 },
   moreIcon: {
     width: 34,
     height: 34,

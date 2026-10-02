@@ -2,6 +2,7 @@ node_modules/
 **/dist/
 *.tsbuildinfo
 **/.expo/
+backend/data/
 web/.env.local
 mobile/.env
 .env
