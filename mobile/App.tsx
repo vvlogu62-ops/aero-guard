@@ -105,6 +105,7 @@ export default function App() {
   const [selectedReport, setSelectedReport] = useState<Mission | null>(null);
   const [filter, setFilter] = useState<"all" | Alert["severity"]>("all");
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [centerTrigger, setCenterTrigger] = useState(0);
   const seenAlertIds = useRef<Set<string>>(new Set());
   const initialAlertsLoaded = useRef(false);
 
@@ -488,6 +489,7 @@ export default function App() {
                 snapshot={snapshot}
                 onDetection={(item) => setSelectedDetection(item)}
                 large
+                centerTrigger={centerTrigger}
               />
               <View style={styles.mapLegend}>
                 <Text style={styles.legendText}>
@@ -516,7 +518,7 @@ export default function App() {
               </View>
               <Pressable
                 style={styles.outlineButton}
-                onPress={() => setTab("Home")}
+                onPress={() => setCenterTrigger((prev) => prev + 1)}
               >
                 <Ionicons name="locate" size={16} color={colors.mint} />
                 <Text style={styles.outlineButtonText}>CENTER DRONE</Text>
@@ -989,24 +991,37 @@ function MiniMap({
   snapshot,
   onDetection,
   large = false,
+  centerTrigger = 0,
 }: {
   snapshot: SystemSnapshot;
   onDetection: (detection: Detection) => void;
   large?: boolean;
+  centerTrigger?: number;
 }) {
   const drone = snapshot.drone;
+  const mapRef = useRef<MapView | null>(null);
+
+  useEffect(() => {
+    if (centerTrigger > 0 && mapRef.current) {
+      mapRef.current.animateToRegion(
+        {
+          latitude: drone.latitude,
+          longitude: drone.longitude,
+          latitudeDelta: large ? 0.0035 : 0.0028,
+          longitudeDelta: large ? 0.0035 : 0.0028,
+        },
+        500,
+      );
+    }
+  }, [centerTrigger, drone.latitude, drone.longitude, large]);
+
   return (
     <View style={[styles.mapContainer, large && styles.mapContainerLarge]}>
       <MapView
+        ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_DEFAULT}
         initialRegion={{
-          latitude: drone.latitude,
-          longitude: drone.longitude,
-          latitudeDelta: large ? 0.004 : 0.0028,
-          longitudeDelta: large ? 0.004 : 0.0028,
-        }}
-        region={{
           latitude: drone.latitude,
           longitude: drone.longitude,
           latitudeDelta: large ? 0.004 : 0.0028,
@@ -1040,14 +1055,19 @@ function MiniMap({
         />
         <Marker
           coordinate={{ latitude: drone.latitude, longitude: drone.longitude }}
+          anchor={{ x: 0.5, y: 0.5 }}
           title="AG-01"
           description={`${drone.altitude} m · SIMULATION`}
         >
-          <View style={styles.droneMarker}>
+          <View style={[styles.droneMarker, { transform: [{ rotate: `${drone.heading || 45}deg` }] }]}>
             <Ionicons name="airplane" size={17} color={colors.bg} />
           </View>
           <Callout>
-            <Text>AG-01 · SIMULATION</Text>
+            <View style={{ padding: 4, minWidth: 130 }}>
+              <Text style={{ fontWeight: "700", color: "#101614", fontSize: 11 }}>🚁 AG-01 (ACTIVE)</Text>
+              <Text style={{ color: "#333", fontSize: 9 }}>Alt: {drone.altitude} m | Spd: {drone.speed} m/s</Text>
+              <Text style={{ color: "#333", fontSize: 9 }}>Battery: {drone.battery}%</Text>
+            </View>
           </Callout>
         </Marker>
         {snapshot.detections
@@ -1060,10 +1080,32 @@ function MiniMap({
                 longitude: item.longitude,
               }}
               onPress={() => onDetection(item)}
-              title={`Possible ${item.type}`}
-              description={`${item.asset} · ${Math.round(item.confidence * 100)}%`}
             >
               <View style={styles.defectMarker} />
+              <Callout tooltip onPress={() => onDetection(item)}>
+                <View style={styles.defectCallout}>
+                  <Text style={styles.calloutTitle}>⚠️ {item.type.toUpperCase()} DETECTED</Text>
+                  <View style={styles.calloutRow}>
+                    <Text style={styles.calloutLabel}>Asset:</Text>
+                    <Text style={styles.calloutValue}>{item.asset}</Text>
+                  </View>
+                  <View style={styles.calloutRow}>
+                    <Text style={styles.calloutLabel}>Zone:</Text>
+                    <Text style={styles.calloutValue}>{item.zone}</Text>
+                  </View>
+                  <View style={styles.calloutRow}>
+                    <Text style={styles.calloutLabel}>Confidence:</Text>
+                    <Text style={styles.calloutValue}>{Math.round(item.confidence * 100)}%</Text>
+                  </View>
+                  <View style={styles.calloutRow}>
+                    <Text style={styles.calloutLabel}>Time:</Text>
+                    <Text style={styles.calloutValue}>{time(item.timestamp)}</Text>
+                  </View>
+                  <View style={styles.calloutBtn}>
+                    <Text style={styles.calloutBtnText}>VIEW DETAILS</Text>
+                  </View>
+                </View>
+              </Callout>
             </Marker>
           ))}
       </MapView>
@@ -2681,4 +2723,47 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: "#d5dfd8", fontSize: 9, fontWeight: "700" },
   textOnlyButton: { alignItems: "center", padding: 12 },
+  defectCallout: {
+    width: 200,
+    padding: 10,
+    backgroundColor: "#18211d",
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#39463e",
+  },
+  calloutTitle: {
+    color: "#e6786c",
+    fontSize: 10,
+    fontWeight: "800",
+    fontFamily: "monospace",
+    marginBottom: 6,
+  },
+  calloutRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 3,
+  },
+  calloutLabel: {
+    color: "#839188",
+    fontSize: 9,
+    fontFamily: "monospace",
+  },
+  calloutValue: {
+    color: "#e8f0ea",
+    fontSize: 9,
+    fontWeight: "600",
+  },
+  calloutBtn: {
+    marginTop: 8,
+    backgroundColor: "#5cdbb1",
+    borderRadius: 3,
+    paddingVertical: 5,
+    alignItems: "center",
+  },
+  calloutBtnText: {
+    color: "#101614",
+    fontSize: 8,
+    fontWeight: "800",
+    fontFamily: "monospace",
+  },
 });
